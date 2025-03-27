@@ -108,3 +108,140 @@ print("student_id | absence_start_date | absence_end_date | total_absent_days")
 print("-" * 68)  # Adjust the length based on your needs
 for row in result:
     print(f"{row['student_id']:<10} | {row['absence_start_date']:<18} | {row['absence_end_date']:<16} | {row['total_absent_days']:<17}")
+
+from datetime import datetime, timedelta
+import re
+import pandas as pd  # Import pandas
+
+def find_latest_absence_streak(df):
+    """
+    Finds the latest absence streak for each student.
+
+    Args:
+        df (pd.DataFrame): DataFrame with student attendance data.
+
+    Returns:
+        pd.DataFrame: DataFrame with the latest absence streak for each student.
+    """
+
+    # Convert 'attendance_date' to datetime objects
+    df['attendance_date'] = pd.to_datetime(df['attendance_date'])
+
+    # Sort by student_id and attendance_date
+    df = df.sort_values(by=['student_id', 'attendance_date'])
+
+    # Identify absence streaks
+    df['date_diff'] = df.groupby('student_id')['attendance_date'].diff()
+    df['streak_start'] = (df['date_diff'] > pd.Timedelta(days=1)) | df['date_diff'].isnull()
+    df['streak_id'] = df.groupby('student_id')['streak_start'].cumsum()
+
+    # Filter absence records
+    absent_df = df[df['status'] == 'Absent'].copy()
+
+    # Calculate absence streak details
+    streak_details = absent_df.groupby(['student_id', 'streak_id']).agg(
+        absence_start_date=('attendance_date', 'min'),
+        absence_end_date=('attendance_date', 'max'),
+        total_absent_days=('attendance_date', 'count')
+    ).reset_index()
+
+    # Select the latest absence streak for each student
+    latest_streak_idx = streak_details.groupby('student_id')['absence_start_date'].idxmax()
+    latest_streak = streak_details.loc[latest_streak_idx]
+
+    # Format the dates as 'DD-MM-YYYY'
+    latest_streak['absence_start_date'] = latest_streak['absence_start_date'].dt.strftime('%d-%m-%Y')
+    latest_streak['absence_end_date'] = latest_streak['absence_end_date'].dt.strftime('%d-%m-%Y')
+
+    return latest_streak
+
+def is_valid_email(email):
+    """
+    Checks if an email is valid based on the given criteria.
+    """
+    if '@' not in email:
+        return False
+
+    if not email.endswith('@gmail.com') and not email.endswith('@example.com'):
+        return False
+
+    local_part = email.split('@')[0]
+    if not local_part:
+        return False
+
+    if re.search(r'[^a-zA-Z0-9_]', local_part):
+        return False
+
+    if local_part[0].isdigit():
+        return False
+
+    return True
+
+def generate_final_output_pandas(absence_df, students_df):
+    """
+    Generates the final output using pandas, with email validation,
+    and absence messages.
+
+    Args:
+        absence_df (pd.DataFrame):  DataFrame output from find_latest_absence_streak.
+        students_df (pd.DataFrame):   DataFrame containing student info.
+
+    Returns:
+        pd.DataFrame: DataFrame representing the final output.
+    """
+
+    # Join the DataFrames on student_id
+    final_df = pd.merge(absence_df, students_df, on='student_id', how='left')
+
+    # Validate emails and create 'email' column
+    final_df['email'] = final_df['parent_email'].apply(lambda email: email if is_valid_email(email) else None)
+
+    # Generate messages and create 'msg' column
+    final_df['msg'] = final_df.apply(
+        lambda row: (
+            f"Dear Parent, your child {row['student_name']} was absent from "
+            f"{row['absence_start_date']} to {row['absence_end_date']} for "
+            f"{row['total_absent_days']} days. Please ensure their attendance improves."
+            if row['email']  # Only generate message if email is valid
+            else None
+        ),
+        axis=1,
+    )
+
+    # Select and order the columns as in the expected output
+    final_df = final_df[['student_id', 'absence_start_date', 'absence_end_date', 'total_absent_days', 'email', 'msg']]
+
+    return final_df
+
+# Attendance data provided
+attendance_data = {
+    'student_id': [101, 101, 101, 101, 101, 102, 102, 102, 102, 103, 103, 103, 103, 103, 104, 104, 104, 104, 104],
+    'attendance_date': ['2024-03-01', '2024-03-02', '2024-03-03', '2024-03-04', '2024-03-05',
+                          '2024-03-02', '2024-03-03', '2024-03-04', '2024-03-05',
+                          '2024-03-05', '2024-03-06', '2024-03-07', '2024-03-08', '2024-03-09',
+                          '2024-03-01', '2024-03-02', '2024-03-03', '2024-03-04', '2024-03-05'],
+    'status': ['Absent', 'Absent', 'Absent', 'Absent', 'Present',
+               'Absent', 'Absent', 'Absent', 'Absent',
+               'Absent', 'Absent', 'Absent', 'Absent', 'Absent',
+               'Present', 'Present', 'Absent', 'Present', 'Present']
+}
+
+# Student data provided
+students_data = {
+    'student_id': [101, 102, 103, 104, 105],
+    'student_name': ['Alice Johnson', 'Bob Smith', 'Charlie Brown', 'David Lee', 'Eva White'],
+    'parent_email': ['alice_parent@example.com', 'bob_parent@example.com', 'invalid_email.com', 'invalid_email.com', 'eva_white@example.com']
+}
+
+# Create DataFrames
+attendance_df = pd.DataFrame(attendance_data)
+students_df = pd.DataFrame(students_data)
+
+# Step 1: Get the latest absence streaks
+absence_streaks_df = find_latest_absence_streak(attendance_df)
+
+# Step 2: Generate the final output
+final_output_df = generate_final_output_pandas(absence_streaks_df, students_df)
+
+# Print the final output
+print(final_output_df.to_markdown(index=False, numalign="left", stralign="left"))
